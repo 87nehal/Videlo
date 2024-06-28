@@ -1,4 +1,3 @@
-// internet-speed.module.js
 import { ref, onMounted, onUnmounted } from 'vue';
 
 const useInternetSpeed = () => {
@@ -7,20 +6,23 @@ const useInternetSpeed = () => {
 
   let intervalId;
 
+  const checkSpeed = () => {
+    const startTime = Date.now();
+    const xhr = new XMLHttpRequest();
+    xhr.open('GET', 'http://localhost:3000', true);
+    xhr.send();
+    xhr.onload = () => {
+      const endTime = Date.now();
+      const latency = endTime - startTime;
+      const speedValue = (xhr.responseText.length * 8) / latency;
+      speed.value = speedValue;
+      speedLabel.value = getSpeedLabel(speedValue);
+    };
+  };
+
   onMounted(() => {
-    intervalId = setInterval(() => {
-      const startTime = Date.now();
-      const xhr = new XMLHttpRequest();
-      xhr.open('GET', 'http://localhost:3000', true);
-      xhr.send();
-      xhr.onload = () => {
-        const endTime = Date.now();
-        const latency = endTime - startTime;
-        const speedValue = (xhr.responseText.length * 8) / latency;
-        speed.value = speedValue;
-        speedLabel.value = getSpeedLabel(speedValue);
-      };
-    }, 10000);
+    checkSpeed();
+    intervalId = setInterval(checkSpeed, 10000);
   });
 
   onUnmounted(() => {
@@ -28,11 +30,11 @@ const useInternetSpeed = () => {
   });
 
   const getSpeedLabel = (speed) => {
-    if (speed < 100) {
+    if (speed < 200) {
       return '2G';
-    } else if (speed < 500) {
+    } else if (speed < 2000) {
       return '3G';
-    } else if (speed < 1000) {
+    } else if (speed < 5000) {
       return '4G';
     } else {
       return '5G';
