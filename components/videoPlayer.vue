@@ -5,13 +5,11 @@
     </video>
     <div v-if="debug" class="debug-info">
       Current Quality: {{ quality }}
-      <br />
-      Speed History: {{ speedHistory }}
-      <br />
+      <br>
       Current Speed: {{ speed }} Kbps
-      <br />
+      <br>
       Speed Label: {{ speedLabel }}
-      <br />
+      <br>
       Recommended Quality: {{ recommendedQuality }}
     </div>
   </div>
@@ -26,46 +24,30 @@ import useInternetSpeed from '~/composables/useInternetSpeed';
 const props = defineProps({
   videoid: {
     type: String,
-    required: true,
-  },
+    required: true
+  }
 });
 
 const DEFAULT_QUALITY = 'auto';
 const quality = ref(DEFAULT_QUALITY);
-const speedHistory = ref([]);
-const SPEED_HISTORY_LENGTH = 3;
-
-if (typeof window !== 'undefined') {
-  quality.value = localStorage.getItem('videoQuality') || DEFAULT_QUALITY;
-}
-
 const videoPlayer = ref(null);
 let player = null;
 let isChangingSource = false;
 
 const { speed, speedLabel, recommendedQuality } = useInternetSpeed();
 
-const getVideoSrc = () => {
-  let actualQuality = quality.value;
-  if (actualQuality === 'auto') {
-    actualQuality = getAverageRecommendedQuality();
-    if (speedLabel.value === '3G') {
-      actualQuality = actualQuality === 'medium' ? 'low' : 'high';
-    }
-  }
-  return `../storage/${props.videoid}/${actualQuality}/output.m3u8`;
-};
-
-const initialSrc = computed(() => getVideoSrc());
+const initialSrc = computed(() => `../storage/${props.videoid}/high/output.m3u8`);
 const lastQualityChange = ref(null);
 const debug = ref(true);
 
 const changeQuality = (newQuality) => {
-  if (isChangingSource) return;
+  if (isChangingSource) {
+    return;
+  }
 
   if (newQuality === 'auto') {
     quality.value = 'auto';
-    newQuality = getAverageRecommendedQuality();
+    newQuality = recommendedQuality.value;
   } else {
     quality.value = newQuality;
   }
@@ -78,13 +60,13 @@ const changeQuality = (newQuality) => {
   if (player) {
     isChangingSource = true;
     const currentTime = player.currentTime();
-    const wasPlaying = !player.paused();
+    const isPlaying = !player.paused();
 
     player.src({ type: 'application/x-mpegURL', src: newSrc });
     player.one('loadedmetadata', () => {
       player.currentTime(currentTime);
-      if (wasPlaying) {
-        player.play().catch((error) => {
+      if (isPlaying) {
+        player.play().catch(error => {
           console.error('Error playing video:', error);
         });
       }
@@ -100,49 +82,29 @@ const changeQuality = (newQuality) => {
   lastQualityChange.value = newQuality;
 };
 
-const getAverageRecommendedQuality = () => {
-  speedHistory.value.unshift(recommendedQuality.value);
-  if (speedHistory.value.length > SPEED_HISTORY_LENGTH) {
-    speedHistory.value.pop();
-  }
+watch([recommendedQuality, speedLabel], ([newRecommendedQuality, newSpeedLabel]) => {
+  if (quality.value === 'auto' && !isChangingSource) {
+    let qualityToSet = newRecommendedQuality;
 
-  const qualityCount = { low: 0, medium: 0, high: 0 };
-  speedHistory.value.forEach((q) => { qualityCount[q]++; });
-
-  let maxCount = 0;
-  let mostFrequentQuality = recommendedQuality.value;
-
-  for (const q in qualityCount) {
-    if (qualityCount[q] > maxCount) {
-      maxCount = qualityCount[q];
-      mostFrequentQuality = q;
-    }
-  }
-
-  return mostFrequentQuality;
-};
-
-watch(
-  [recommendedQuality, speedLabel],
-  ([newRecommendedQuality, newSpeedLabel]) => {
-    if (quality.value === 'auto' && !isChangingSource) {
-      let qualityToSet = getAverageRecommendedQuality();
-      if (newSpeedLabel === '3G') {
-        qualityToSet = qualityToSet === 'medium' ? 'low' : 'high';
-      }
-      if (qualityToSet !== lastQualityChange.value) {
-        changeQuality('auto');
+    if (newSpeedLabel === '3G') {
+      if (newRecommendedQuality === 'medium') {
+        qualityToSet = 'low';
+      } else {
+        qualityToSet = 'high';
       }
     }
+    if (qualityToSet !== lastQualityChange.value) {
+      changeQuality('auto'); 
+    }
   }
-);
+});
 
-const qualitySelector = function (options) {
+const qualitySelector = function(options) {
   this.ready(() => {
     const qualities = ['auto', 'low', 'medium', 'high'];
-    const qualityItems = qualities.map((q) => ({
+    const qualityItems = qualities.map(q => ({
       label: q === 'auto' ? 'Auto' : q.charAt(0).toUpperCase() + q.slice(1),
-      value: q,
+      value: q
     }));
 
     const MenuButton = videojs.getComponent('MenuButton');
@@ -153,7 +115,7 @@ const qualitySelector = function (options) {
         super(player, {
           label: options.label,
           selectable: true,
-          selected: options.selected || false,
+          selected: options.selected || false
         });
         this.label = options.label;
         this.value = options.value;
@@ -169,24 +131,29 @@ const qualitySelector = function (options) {
       constructor(player, options) {
         super(player, options);
         this.controlText('Quality');
-        this.updateButtonText(quality.value);
+        this.updateButtonText(quality.value); 
       }
 
       createItems() {
-        return qualityItems.map((qualityItem) => new QualityMenuItem(this.player_, {
-          label: qualityItem.label,
-          value: qualityItem.value,
-          selected: qualityItem.value === quality.value,
-        }));
+        return qualityItems.map(qualityItem => {
+          return new QualityMenuItem(this.player_, {
+            label: qualityItem.label,
+            value: qualityItem.value,
+            selected: qualityItem.value === quality.value 
+          });
+        });
       }
 
       updateButtonText(qualityLevel) {
-        this.el().querySelector('.vjs-icon-placeholder').textContent =
+        this.el().querySelector('.vjs-icon-placeholder').textContent = 
           qualityLevel === 'auto' ? 'Auto' : qualityLevel.charAt(0).toUpperCase() + qualityLevel.slice(1);
       }
 
       updateMenuItems(selectedQuality) {
-        this.items.forEach((item) => { item.selected(item.value === selectedQuality); });
+        const items = this.items;
+        items.forEach(item => {
+          item.selected(item.value === selectedQuality);
+        });
       }
 
       buildCSSClass() {
@@ -202,37 +169,45 @@ const qualitySelector = function (options) {
 onMounted(() => {
   videojs.registerPlugin('qualitySelector', qualitySelector);
 
-  player = videojs(
-    videoPlayer.value,
-    { plugins: { qualitySelector: {} } },
-    () => {
-      if (typeof window !== 'undefined') {
-        const savedVolume = localStorage.getItem('videoPlayerVolume');
-        if (savedVolume !== null) {
-          player.volume(parseFloat(savedVolume));
-        }
-        player.playsinline(true);
-        player.controls(true);
-        player.preload('auto');
-        player.muted(false);
-        player.load();
-
-        player.on('volumechange', () => {
-          localStorage.setItem('videoPlayerVolume', player.volume());
-        });
-
-        player.on('error', (e) => {
-          console.error('Video.js error:', player.error());
-        });
-      }
+  player = videojs(videoPlayer.value, {
+    plugins: {
+      qualitySelector: {}
     }
-  );
+  }, () => {
+    if (typeof window !== 'undefined') {
+      const savedVolume = localStorage.getItem('videoPlayerVolume');
+      if (savedVolume !== null) {
+        player.volume(parseFloat(savedVolume));
+      }
+
+      const savedQuality = localStorage.getItem('videoQuality') || DEFAULT_QUALITY; // Use saved or default
+      quality.value = savedQuality; 
+      changeQuality(savedQuality); 
+
+      player.playsinline(true);
+      player.controls(true);
+      player.preload('auto');
+      player.muted(false);
+      player.load();
+
+      player.on('volumechange', () => {
+        localStorage.setItem('videoPlayerVolume', player.volume());
+      });
+
+      player.on('error', (e) => {
+        console.error('Video.js error:', player.error());
+      });
+    }
+  });
 });
 
 onBeforeUnmount(() => {
-  if (player) player.dispose();
+  if (player) {
+    player.dispose();
+  }
 });
 </script>
+
 
 <style scoped>
 .theater-mode .video-js {
