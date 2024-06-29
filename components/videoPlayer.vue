@@ -1,61 +1,148 @@
 <template>
-  <div class="theater-mode rounded-lg overflow-hidden">
+  <div class="theater-mode rounded-lg overflow-hidden relative">
     <video ref="videoPlayer" class="video-js vjs-default-skin rounded-lg">
       <source :src="initialSrc" type="application/x-mpegURL" />
     </video>
+    <div v-if="debug" class="debug-info">
+      Current Quality: {{ quality }}
+      <br />
+      Speed History: {{ speedHistory }}
+      <br />
+      Current Speed: {{ speed }} Kbps
+      <br />
+      Speed Label: {{ speedLabel }}
+      <br />
+      Recommended Quality: {{ recommendedQuality }}
+    </div>
   </div>
 </template>
 
 <script setup>
-import { onMounted, onBeforeUnmount, ref, computed } from 'vue';
+import { onMounted, onBeforeUnmount, ref, computed, watch } from 'vue';
 import videojs from 'video.js';
 import 'video.js/dist/video-js.css';
+import useInternetSpeed from '~/composables/useInternetSpeed';
 
 const props = defineProps({
   videoid: {
     type: String,
-    required: true
-  }
+    required: true,
+  },
 });
 
-const DEFAULT_QUALITY = 'high';
+const DEFAULT_QUALITY = 'auto';
 const quality = ref(DEFAULT_QUALITY);
+const speedHistory = ref([]);
+const SPEED_HISTORY_LENGTH = 3;
+
+if (typeof window !== 'undefined') {
+  quality.value = localStorage.getItem('videoQuality') || DEFAULT_QUALITY;
+}
+
 const videoPlayer = ref(null);
 let player = null;
+let isChangingSource = false;
 
-const initialSrc = computed(() => `../storage/${props.videoid}/${DEFAULT_QUALITY}/output.m3u8`);
+const { speed, speedLabel, recommendedQuality } = useInternetSpeed();
 
-const changeQuality = (newQuality) => {
-  quality.value = newQuality;
-  if (typeof window !== 'undefined') {
-    localStorage.setItem('videoQuality', newQuality);
-  }
-  const newSrc = `../storage/${props.videoid}/${newQuality}/output.m3u8`;
-  if (player) {
-    const currentTime = player.currentTime();
-    const isPlaying = !player.paused();
-    player.src({ type: 'application/x-mpegURL', src: newSrc });
-    player.load();
-    player.currentTime(currentTime);
-    if (isPlaying) {
-      player.play();
-    }
-    // Update the button text
-    const qualityButton = player.getChild('controlBar').getChild('QualityMenuButton');
-    if (qualityButton) {
-      qualityButton.updateButtonText(newQuality);
-      qualityButton.updateMenuItems(newQuality);
+const getVideoSrc = () => {
+  let actualQuality = quality.value;
+  if (actualQuality === 'auto') {
+    actualQuality = getAverageRecommendedQuality();
+    if (speedLabel.value === '3G') {
+      actualQuality = actualQuality === 'medium' ? 'low' : 'high';
     }
   }
+  return `../storage/${props.videoid}/${actualQuality}/output.m3u8`;
 };
 
-// Custom Video.js plugin for quality selection
-const qualitySelector = function(options) {
+const initialSrc = computed(() => getVideoSrc());
+const lastQualityChange = ref(null);
+const debug = ref(true);
+
+const changeQuality = (newQuality) => {
+  if (isChangingSource) return;
+
+  if (newQuality === 'auto') {
+    quality.value = 'auto';
+    newQuality = getAverageRecommendedQuality();
+  } else {
+    quality.value = newQuality;
+  }
+
+  if (typeof window !== 'undefined') {
+    localStorage.setItem('videoQuality', quality.value);
+  }
+
+  const newSrc = `../storage/${props.videoid}/${newQuality}/output.m3u8`;
+  if (player) {
+    isChangingSource = true;
+    const currentTime = player.currentTime();
+    const wasPlaying = !player.paused();
+
+    player.src({ type: 'application/x-mpegURL', src: newSrc });
+    player.one('loadedmetadata', () => {
+      player.currentTime(currentTime);
+      if (wasPlaying) {
+        player.play().catch((error) => {
+          console.error('Error playing video:', error);
+        });
+      }
+      isChangingSource = false;
+    });
+
+    const qualityButton = player.getChild('controlBar').getChild('QualityMenuButton');
+    if (qualityButton) {
+      qualityButton.updateButtonText(quality.value);
+      qualityButton.updateMenuItems(quality.value);
+    }
+  }
+  lastQualityChange.value = newQuality;
+};
+
+const getAverageRecommendedQuality = () => {
+  speedHistory.value.unshift(recommendedQuality.value);
+  if (speedHistory.value.length > SPEED_HISTORY_LENGTH) {
+    speedHistory.value.pop();
+  }
+
+  const qualityCount = { low: 0, medium: 0, high: 0 };
+  speedHistory.value.forEach((q) => { qualityCount[q]++; });
+
+  let maxCount = 0;
+  let mostFrequentQuality = recommendedQuality.value;
+
+  for (const q in qualityCount) {
+    if (qualityCount[q] > maxCount) {
+      maxCount = qualityCount[q];
+      mostFrequentQuality = q;
+    }
+  }
+
+  return mostFrequentQuality;
+};
+
+watch(
+  [recommendedQuality, speedLabel],
+  ([newRecommendedQuality, newSpeedLabel]) => {
+    if (quality.value === 'auto' && !isChangingSource) {
+      let qualityToSet = getAverageRecommendedQuality();
+      if (newSpeedLabel === '3G') {
+        qualityToSet = qualityToSet === 'medium' ? 'low' : 'high';
+      }
+      if (qualityToSet !== lastQualityChange.value) {
+        changeQuality('auto');
+      }
+    }
+  }
+);
+
+const qualitySelector = function (options) {
   this.ready(() => {
-    const qualities = ['low', 'medium', 'high'];
-    const qualityItems = qualities.map(q => ({
-      label: q.charAt(0).toUpperCase() + q.slice(1),
-      value: q
+    const qualities = ['auto', 'low', 'medium', 'high'];
+    const qualityItems = qualities.map((q) => ({
+      label: q === 'auto' ? 'Auto' : q.charAt(0).toUpperCase() + q.slice(1),
+      value: q,
     }));
 
     const MenuButton = videojs.getComponent('MenuButton');
@@ -66,7 +153,7 @@ const qualitySelector = function(options) {
         super(player, {
           label: options.label,
           selectable: true,
-          selected: options.selected || false
+          selected: options.selected || false,
         });
         this.label = options.label;
         this.value = options.value;
@@ -86,24 +173,20 @@ const qualitySelector = function(options) {
       }
 
       createItems() {
-        return qualityItems.map(qualityItem => {
-          return new QualityMenuItem(this.player_, {
-            label: qualityItem.label,
-            value: qualityItem.value,
-            selected: qualityItem.value === quality.value
-          });
-        });
+        return qualityItems.map((qualityItem) => new QualityMenuItem(this.player_, {
+          label: qualityItem.label,
+          value: qualityItem.value,
+          selected: qualityItem.value === quality.value,
+        }));
       }
 
       updateButtonText(qualityLevel) {
-        this.el().querySelector('.vjs-icon-placeholder').textContent = qualityLevel.charAt(0).toUpperCase() + qualityLevel.slice(1);
+        this.el().querySelector('.vjs-icon-placeholder').textContent =
+          qualityLevel === 'auto' ? 'Auto' : qualityLevel.charAt(0).toUpperCase() + qualityLevel.slice(1);
       }
 
       updateMenuItems(selectedQuality) {
-        const items = this.items;
-        items.forEach(item => {
-          item.selected(item.value === selectedQuality);
-        });
+        this.items.forEach((item) => { item.selected(item.value === selectedQuality); });
       }
 
       buildCSSClass() {
@@ -119,39 +202,35 @@ const qualitySelector = function(options) {
 onMounted(() => {
   videojs.registerPlugin('qualitySelector', qualitySelector);
 
-  player = videojs(videoPlayer.value, {
-    plugins: {
-      qualitySelector: {}
-    }
-  }, () => {
-    if (typeof window !== 'undefined') {
-      const savedVolume = localStorage.getItem('videoPlayerVolume');
-      if (savedVolume !== null) {
-        player.volume(parseFloat(savedVolume));
-      }
-      // Load saved quality after mount
-      const savedQuality = localStorage.getItem('videoQuality');
-      if (savedQuality) {
-        changeQuality(savedQuality);
-      }
-    }
-    player.playsinline(true);
-    player.controls(true);
-    player.preload('auto');
-    player.muted(false);
-    player.load();
-    player.on('volumechange', () => {
+  player = videojs(
+    videoPlayer.value,
+    { plugins: { qualitySelector: {} } },
+    () => {
       if (typeof window !== 'undefined') {
-        localStorage.setItem('videoPlayerVolume', player.volume());
+        const savedVolume = localStorage.getItem('videoPlayerVolume');
+        if (savedVolume !== null) {
+          player.volume(parseFloat(savedVolume));
+        }
+        player.playsinline(true);
+        player.controls(true);
+        player.preload('auto');
+        player.muted(false);
+        player.load();
+
+        player.on('volumechange', () => {
+          localStorage.setItem('videoPlayerVolume', player.volume());
+        });
+
+        player.on('error', (e) => {
+          console.error('Video.js error:', player.error());
+        });
       }
-    });
-  });
+    }
+  );
 });
 
 onBeforeUnmount(() => {
-  if (player) {
-    player.dispose();
-  }
+  if (player) player.dispose();
 });
 </script>
 
@@ -162,7 +241,6 @@ onBeforeUnmount(() => {
   transition: height 0.3s ease, width 0.3s ease;
 }
 
-/* Add this new style for the quality selector button */
 :deep(.vjs-quality-selector) {
   font-size: 0.8em;
 }
@@ -173,7 +251,6 @@ onBeforeUnmount(() => {
   line-height: 2.2;
 }
 
-/* Responsive styles remain the same */
 @media (max-width: 1200px) {
   .theater-mode .video-js {
     height: calc(70vh) !important;
